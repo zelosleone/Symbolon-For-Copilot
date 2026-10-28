@@ -2,16 +2,20 @@ import { createHash } from 'node:crypto';
 import * as vscode from 'vscode';
 import { NotSignedInError, USAGE_URL, type Auth } from './auth.js';
 import { fetchAccountCatalog, fetchCodexCatalog, type CatalogModel } from './catalog.js';
+import type { Session } from './chatgpt.js';
 import { createMarker, toInput, toTools } from './convert.js';
 import { configured, DEFAULT_TIER, toModels, type SymbolonModel } from './models.js';
 import { ApiError, streamResponse, type ResponseEvent, type ResponseItem, type ResponseUsage } from './responses.js';
 
 const MODELS_KEY = 'symbolon.models';
 const CHARS_PER_TOKEN_KEY = 'symbolon.charsPerToken';
-// The plan may only serve the app the user connected: Copilot Chat and VS Code itself.
-const ALLOWED_CALLERS = new Set(['github.copilot-chat', 'core']);
 
 type Options = vscode.ProvideLanguageModelChatResponseOptions & Record<string, unknown>;
+
+interface Retry {
+  body: Record<string, unknown>;
+  refresh: boolean;
+}
 
 interface Turn {
   model: SymbolonModel;
@@ -31,7 +35,7 @@ export class SymbolonProvider implements vscode.LanguageModelChatProvider<Symbol
   readonly onDidChangeLanguageModelChatInformation = this.changed.event;
   private models: SymbolonModel[];
   private charsPerToken: number;
-  // Set when the plan route turns down speed tiers, so later requests stop sending them.
+  // Set when the backend turns down speed tiers, so later requests stop sending them.
   private tiersRejected = false;
 
   constructor(
@@ -56,10 +60,6 @@ export class SymbolonProvider implements vscode.LanguageModelChatProvider<Symbol
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
-    const caller = typeof options.requestInitiator === 'string' ? options.requestInitiator : undefined;
-    if (caller && !ALLOWED_CALLERS.has(caller)) {
-      throw new Error(`Symbolon serves Copilot Chat only; ChatGPT plan use can't be shared with ${caller}.`);
-    }
     const body = this.buildBody(model, messages, options);
     const turn: Turn = { model, chars: payloadChars(body), reasoning: [], completed: false, streamed: false, progress };
     const abort = new AbortController();
@@ -80,20 +80,20 @@ export class SymbolonProvider implements vscode.LanguageModelChatProvider<Symbol
   }
 
   async refresh(): Promise<void> {
-    const accessToken = await this.auth.accessToken().catch(() => undefined);
-    if (!accessToken) return;
-    const catalog = await this.catalog(accessToken);
+    const session = await this.auth.session().catch(() => undefined);
+    if (!session) return;
+    const catalog = await this.catalog(session);
     if (catalog) this.setModels(toModels(catalog));
   }
 
   // The account's own catalog decides; Codex's models.json covers an unreachable /models.
-  private async catalog(accessToken: string): Promise<CatalogModel[] | undefined> {
+  private async catalog(session: Session): Promise<CatalogModel[] | undefined> {
     try {
-      return await fetchAccountCatalog(accessToken);
+      return await fetchAccountCatalog(session);
     } catch (error) {
       this.log.warn(`Account model list failed, using Codex's models.json: ${(error as Error).message}`);
     }
-    return fetchCodexCatalog().catch((error: unknown) => {
+    return fetchCodexCatalog(session.plan).catch((error: unknown) => {
       this.log.warn(`Model refresh failed: ${(error as Error).message}`);
       return undefined;
     });
@@ -112,7 +112,7 @@ export class SymbolonProvider implements vscode.LanguageModelChatProvider<Symbol
     this.changed.fire();
   }
 
-  // Store off and streaming on are required for ChatGPT plan requests.
+  // The Codex backend keeps nothing server-side: store off, full history every turn.
   private buildBody(model: SymbolonModel, messages: readonly vscode.LanguageModelChatRequestMessage[], options: Options) {
     const { lite, verbosity } = model.request;
     const tier = configured(model, options, 'serviceTier');
@@ -130,35 +130,35 @@ export class SymbolonProvider implements vscode.LanguageModelChatProvider<Symbol
     };
   }
 
-  private async send(body: Record<string, unknown>, session: string, turn: Turn, signal: AbortSignal, retried = false): Promise<void> {
+  private async send(body: Record<string, unknown>, session: string, turn: Turn, signal: AbortSignal, retry?: Retry): Promise<void> {
     try {
-      await this.stream(body, session, turn, signal, retried);
+      await this.stream(retry?.body ?? body, session, turn, signal, retry?.refresh === true);
     } catch (error) {
-      const retry = retried || turn.streamed ? undefined : this.retryable(error, body);
-      if (!retry) throw error;
-      await this.send(retry, session, turn, signal, true);
+      const next = retry || turn.streamed ? undefined : this.retryable(error, body);
+      if (!next) throw error;
+      await this.send(body, session, turn, signal, next);
     }
   }
 
   private async stream(body: Record<string, unknown>, session: string, turn: Turn, signal: AbortSignal, refreshed: boolean): Promise<void> {
-    const accessToken = await this.auth.accessToken(refreshed);
+    const account = await this.auth.session(refreshed);
     const request = { ...body, prompt_cache_key: session };
     const headers = { 'session-id': session, 'thread-id': session };
-    for await (const event of streamResponse(accessToken, request, headers, signal)) this.onEvent(event, turn);
+    for await (const event of streamResponse(account, request, headers, signal)) this.onEvent(event, turn);
     if (turn.reasoning.length > 0) turn.progress.report(createMarker(turn.reasoning));
     if (!turn.completed) throw new Error('The ChatGPT response ended before it completed. Try again.');
   }
 
-  /** The body to retry once with: after a rejected token (refreshed) or a rejected speed tier (dropped). */
-  private retryable(error: unknown, body: Record<string, unknown>): Record<string, unknown> | undefined {
+  /** One retry: with a refreshed token after a 401, or without the speed tier the backend turned down. */
+  private retryable(error: unknown, body: Record<string, unknown>): Retry | undefined {
     if (!(error instanceof ApiError)) return undefined;
-    if (error.status === 401) return body;
-    if (error.code !== 'subscription_sharing_unsupported_capability' || !('service_tier' in body)) return undefined;
+    if (error.status === 401) return { body, refresh: true };
+    if (error.status !== 400 || !error.message.includes('service_tier') || !('service_tier' in body)) return undefined;
     this.tiersRejected = true;
-    this.log.warn('ChatGPT plan requests rejected the speed tier; sending standard speed from now on.');
+    this.log.warn('ChatGPT rejected the speed tier; sending standard speed from now on.');
     const rest = { ...body };
     delete rest.service_tier;
-    return rest;
+    return { body: rest, refresh: false };
   }
 
   private onEvent(event: ResponseEvent, turn: Turn): void {
@@ -189,24 +189,19 @@ export class SymbolonProvider implements vscode.LanguageModelChatProvider<Symbol
   private explain(error: unknown): unknown {
     if (error instanceof NotSignedInError) void this.auth.signIn();
     if (!(error instanceof ApiError)) return error;
-    this.log.error(`${error.message} (code ${error.code ?? 'none'}, request ${error.requestId ?? 'unknown'})`);
-    const known = KNOWN_ERRORS[error.code ?? ''];
-    if (!known) return error;
-    known.notify?.();
-    return new Error(known.message);
+    this.log.error(`${error.message} (code ${error.code ?? 'none'})`);
+    if (error.code !== 'usage_limit_reached') return error;
+    const message = `ChatGPT usage limit reached${resetsIn(error.resetsInSeconds)}.`;
+    void manageUsage(`Symbolon: ${message}`);
+    return new Error(message);
   }
 }
 
-const KNOWN_ERRORS: Record<string, { message: string; notify?: () => void }> = {
-  subscription_sharing_usage_limit_exceeded: {
-    message: 'ChatGPT plan usage limit reached. Review it under Manage usage in ChatGPT settings.',
-    notify: () => void manageUsage('Symbolon: ChatGPT plan usage limit reached. The limit may be your plan or the one set for Symbolon.'),
-  },
-  subscription_sharing_user_not_eligible: {
-    message: "This ChatGPT account or workspace can't use its plan in Symbolon (Plus or Pro needed, or your workspace admin hasn't allowed it).",
-  },
-  subscription_sharing_usage_unavailable: { message: 'ChatGPT could not check your plan usage right now. Try again shortly.' },
-};
+function resetsIn(seconds: number | undefined): string {
+  if (!seconds) return '';
+  const minutes = Math.ceil(seconds / 60);
+  return minutes < 120 ? `; it resets in ${minutes} min` : `; it resets in ${Math.round(minutes / 60)} h`;
+}
 
 function toolFields(model: SymbolonModel, options: Options): Record<string, unknown> {
   const tools = toTools(options.tools ?? [], model.request.lite);

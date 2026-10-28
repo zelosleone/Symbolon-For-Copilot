@@ -1,7 +1,9 @@
-import { RESOURCE } from './siwc.js';
+import { API_BASE, apiHeaders, type Session } from './chatgpt.js';
 
-// Codex's own bundled catalog: the same schema the account's /v1/models returns.
+// Codex's own bundled catalog: the same schema the account's /models returns.
 const CODEX_MODELS_JSON = 'https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json';
+// The catalog hides models whose minimal_client_version is newer than this, so ask as the newest client.
+const CLIENT_VERSION = '99.0.0';
 
 export interface ReasoningLevel {
   effort: string;
@@ -20,7 +22,6 @@ export interface CatalogModel {
   display_name?: string;
   description?: string | null;
   visibility?: string;
-  supported_in_api?: boolean;
   priority?: number;
   context_window?: number | null;
   effective_context_window_percent?: number;
@@ -34,6 +35,7 @@ export interface CatalogModel {
   use_responses_lite?: boolean;
   service_tiers?: ServiceTier[];
   default_service_tier?: string | null;
+  available_in_plans?: string[];
 }
 
 class CatalogError extends Error {
@@ -45,22 +47,23 @@ class CatalogError extends Error {
   }
 }
 
-/** The signed-in account's catalog, in the models.json schema. */
-export async function fetchAccountCatalog(accessToken: string): Promise<CatalogModel[]> {
-  const res = await fetch(`${RESOURCE}/models`, {
-    headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+/** The signed-in account's models, in the models.json schema. */
+export async function fetchAccountCatalog(session: Session): Promise<CatalogModel[]> {
+  const res = await fetch(`${API_BASE}/models?client_version=${CLIENT_VERSION}`, {
+    headers: { ...apiHeaders(session), Accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new CatalogError(res.status, await res.text());
-  return readModels(await res.json());
+  const models = readModels(await res.json());
+  if (models.length === 0) throw new CatalogError(200, 'The account catalog was empty.');
+  return models;
 }
 
-/** Codex's bundled models.json, used when the account catalog is unavailable. */
-export async function fetchCodexCatalog(): Promise<CatalogModel[]> {
+/** Codex's published models.json, narrowed to the account's plan, for when /models is unavailable. */
+export async function fetchCodexCatalog(plan: string | undefined): Promise<CatalogModel[]> {
   const res = await fetch(CODEX_MODELS_JSON, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new CatalogError(res.status);
-  // The bundled file also lists models the public Responses API doesn't serve.
-  return readModels(await res.json()).filter((model) => model.supported_in_api !== false);
+  return readModels(await res.json()).filter((model) => !plan || !model.available_in_plans || model.available_in_plans.includes(plan));
 }
 
 function readModels(body: unknown): CatalogModel[] {

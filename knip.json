@@ -1,1 +1,1 @@
-{ "entry": ["test/*.mjs"] }
+{ "entry": ["test/*.mjs", "test/*.cjs"] }

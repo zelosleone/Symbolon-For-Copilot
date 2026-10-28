@@ -1,21 +1,23 @@
 import * as vscode from 'vscode';
 import { Auth, USAGE_URL } from './auth.js';
+import { identify } from './chatgpt.js';
 import { scheduleLodestarNotice } from './lodestar.js';
 import { SymbolonProvider } from './provider.js';
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 
 export function activate(context: vscode.ExtensionContext): void {
+  identify('Symbolon', (context.extension.packageJSON as { version: string }).version);
   const log = vscode.window.createOutputChannel('Symbolon', { log: true });
-  const auth = new Auth(context.secrets, context.globalState);
+  const auth = new Auth(context.secrets);
   const provider = new SymbolonProvider(context.globalState, auth, log);
   const timer = setInterval(() => void provider.refresh(), REFRESH_INTERVAL_MS);
-  let active: string | undefined;
+  let account: string | undefined;
   const onAuthChange = async (): Promise<void> => {
-    // Token refreshes rewrite the store too; only an account switch changes the model list.
-    const subject = (await auth.current())?.subject;
-    if (subject === active) return;
-    active = subject;
+    // Token refreshes rewrite the session too; only a different account changes the model list.
+    const current = (await auth.current())?.accountId ?? '';
+    if (current === account) return;
+    account = current;
     provider.accountChanged();
   };
 
@@ -33,17 +35,18 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 async function manage(auth: Auth, provider: SymbolonProvider, log: vscode.LogOutputChannel): Promise<void> {
-  const account = await auth.current();
-  const actions: Record<string, () => unknown> = account
+  const session = await auth.current();
+  const actions: Record<string, () => unknown> = session
     ? {
-        'Manage usage': () => vscode.env.openExternal(vscode.Uri.parse(USAGE_URL)),
+        'Usage limits': () => vscode.env.openExternal(vscode.Uri.parse(USAGE_URL)),
         'Refresh models': () => provider.refresh(),
-        'Switch account': () => auth.signIn(),
+        'Sign in with another account': () => auth.signIn(),
         'Sign out': () => auth.signOut(),
       }
-    : { 'Continue with ChatGPT': () => auth.signIn() };
+    : { 'Sign in with ChatGPT': () => auth.signIn() };
   actions['Show logs'] = () => log.show();
-  const title = account ? `Symbolon: using ChatGPT plan of ${account.email ?? 'your account'}` : 'Symbolon: signed out';
+  const plan = session?.plan ? ` (${session.plan})` : '';
+  const title = session ? `Symbolon: signed in as ${session.email ?? 'your ChatGPT account'}${plan}` : 'Symbolon: signed out';
   const choice = await vscode.window.showQuickPick(Object.keys(actions), { title });
   if (choice) await actions[choice]();
 }

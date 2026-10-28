@@ -42,8 +42,9 @@ function toModel(model: CatalogModel): SymbolonModel {
     name: model.display_name || model.slug,
     family: model.slug,
     version: model.slug,
-    tooltip: [model.description, 'Using ChatGPT plan.'].filter(Boolean).join(' '),
-    detail: 'ChatGPT plan',
+    tooltip: model.description ?? undefined,
+    // Sets these apart from Copilot's own models of the same name.
+    detail: 'ChatGPT',
     maxInputTokens,
     maxOutputTokens: context - maxInputTokens,
     maxContextWindowTokens: context,

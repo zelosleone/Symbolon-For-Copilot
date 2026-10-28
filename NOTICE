@@ -1,5 +1,6 @@
-Sign-in and requests follow OpenAI's published Sign in with ChatGPT documentation for open-source apps
-(https://developers.openai.com/siwc). No code from the Sign-in with ChatGPT DevKit is included.
+Sign-in uses Codex's public OAuth client the way Codex (https://github.com/openai/codex, Apache-2.0) and
+Hermes Agent (https://github.com/NousResearch/hermes-agent, MIT) do. Requests identify themselves as
+Symbolon. No code from either project is included.
 
-Model metadata comes at runtime from the signed-in account's catalog, or from Codex's models.json
-(https://github.com/openai/codex, Apache-2.0) when that is unavailable. Neither is bundled.
+Model metadata comes at runtime from the signed-in account's catalog, or from Codex's models.json when
+that is unavailable. Neither is bundled.

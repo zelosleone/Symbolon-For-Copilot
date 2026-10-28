@@ -1,8 +1,8 @@
 {
   "name": "symbolon-for-copilot",
   "displayName": "Symbolon: Copilot Provider",
-  "description": "Use your ChatGPT plan in GitHub Copilot Chat with Sign in with ChatGPT. No API key needed.",
-  "version": "0.1.0",
+  "description": "Use your ChatGPT subscription in GitHub Copilot Chat. Sign in with your ChatGPT account, the same login Codex uses. No API key needed.",
+  "version": "0.2.0",
   "type": "module",
   "publisher": "DenizhanDaklr",
   "license": "MIT",
@@ -24,7 +24,7 @@
   ],
   "keywords": [
     "chatgpt",
-    "sign in with chatgpt",
+    "chatgpt subscription",
     "chatgpt plan",
     "codex",
     "copilot"
@@ -52,7 +52,7 @@
       },
       {
         "command": "symbolon.signIn",
-        "title": "Symbolon: Continue with ChatGPT"
+        "title": "Symbolon: Sign In with ChatGPT"
       },
       {
         "command": "symbolon.signOut",

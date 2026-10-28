@@ -1,5 +1,5 @@
 import * as zlib from 'node:zlib';
-import { RESOURCE } from './siwc.js';
+import { API_BASE, apiHeaders, type Session } from './chatgpt.js';
 
 export interface ResponseItem {
   type: string;
@@ -17,7 +17,6 @@ export interface ResponseUsage {
   output_tokens: number;
   total_tokens?: number;
   input_tokens_details?: { cached_tokens?: number };
-  output_tokens_details?: { reasoning_tokens?: number };
 }
 
 export interface ResponseEvent {
@@ -38,14 +37,14 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string | undefined,
     message: string,
-    readonly requestId?: string | null,
+    readonly resetsInSeconds?: number,
   ) {
     super(message);
   }
 }
 
-// ChatGPT plan requests reject uncompressed bodies over about 1 MiB.
-const COMPRESS_FROM_BYTES = 256 * 1024;
+// Large bodies go out zstd-compressed, as Codex sends them.
+const COMPRESS_FROM_BYTES = 64 * 1024;
 
 function encode(body: object): { data: Uint8Array; headers: Record<string, string> } {
   const json = Buffer.from(JSON.stringify(body));
@@ -55,24 +54,17 @@ function encode(body: object): { data: Uint8Array; headers: Record<string, strin
 }
 
 export async function* streamResponse(
-  accessToken: string,
+  session: Session,
   body: object,
   headers: Record<string, string>,
   signal: AbortSignal,
 ): AsyncGenerator<ResponseEvent> {
   const encoded = encode(body);
-  const res = await fetch(`${RESOURCE}/responses`, {
+  const res = await fetch(`${API_BASE}/responses`, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-      ...encoded.headers,
-      ...headers,
-    },
+    headers: { ...apiHeaders(session), 'Content-Type': 'application/json', Accept: 'text/event-stream', ...encoded.headers, ...headers },
     body: encoded.data,
     signal,
-    redirect: 'error',
   });
   if (!res.ok || !res.body) throw await toApiError(res);
   let buffer = '';
@@ -92,19 +84,22 @@ function* parseEvents(lines: string[]): Generator<ResponseEvent> {
 }
 
 interface ErrorBody {
-  error?: { code?: string; message?: string } | string;
+  error?: { code?: string; type?: string; message?: string; resets_in_seconds?: number } | string;
   detail?: string;
 }
 
 async function toApiError(res: Response): Promise<ApiError> {
   const text = await res.text().catch(() => '');
-  let body: ErrorBody = {};
+  const body = parseError(text);
+  const error = typeof body.error === 'string' ? { code: body.error } : (body.error ?? {});
+  const message = `ChatGPT request failed (HTTP ${res.status}). ${error.message ?? body.detail ?? ''}`.trim().slice(0, 500);
+  return new ApiError(res.status, error.code ?? error.type, message, error.resets_in_seconds);
+}
+
+function parseError(text: string): ErrorBody {
   try {
-    body = JSON.parse(text) as ErrorBody;
+    return JSON.parse(text) as ErrorBody;
   } catch {
-    body = { detail: text };
+    return { detail: text };
   }
-  const error = typeof body.error === 'string' ? { code: body.error } : body.error;
-  const message = error?.message ?? body.detail ?? text;
-  return new ApiError(res.status, error?.code, `ChatGPT request failed (HTTP ${res.status}). ${message}`.trim().slice(0, 500), res.headers.get('x-request-id'));
 }
