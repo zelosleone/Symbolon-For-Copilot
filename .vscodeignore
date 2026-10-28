@@ -1,0 +1,11 @@
+.gitignore
+.vscode/**
+.vscodeignore
+tsconfig.json
+eslint.config.js
+src/**
+test/**
+*.map
+out/**/*.map
+images/icon.svg
+knip.json

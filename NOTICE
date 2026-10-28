@@ -1,0 +1,5 @@
+Sign-in and requests follow OpenAI's published Sign in with ChatGPT documentation for open-source apps
+(https://developers.openai.com/siwc). No code from the Sign-in with ChatGPT DevKit is included.
+
+Model metadata comes at runtime from the signed-in account's catalog, or from Codex's models.json
+(https://github.com/openai/codex, Apache-2.0) when that is unavailable. Neither is bundled.

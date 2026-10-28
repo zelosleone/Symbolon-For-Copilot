@@ -1,0 +1,79 @@
+{
+  "name": "symbolon-for-copilot",
+  "displayName": "Symbolon: Copilot Provider",
+  "description": "Use your ChatGPT plan in GitHub Copilot Chat with Sign in with ChatGPT. No API key needed.",
+  "version": "0.1.0",
+  "type": "module",
+  "publisher": "DenizhanDaklr",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zelosleone/Symbolon-For-Copilot"
+  },
+  "homepage": "https://github.com/zelosleone/Symbolon-For-Copilot#readme",
+  "bugs": {
+    "url": "https://github.com/zelosleone/Symbolon-For-Copilot/issues"
+  },
+  "engines": {
+    "vscode": "^1.118.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "keywords": [
+    "chatgpt",
+    "sign in with chatgpt",
+    "chatgpt plan",
+    "codex",
+    "copilot"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "extensionKind": [
+    "ui",
+    "workspace"
+  ],
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "symbolon",
+        "displayName": "Symbolon",
+        "managementCommand": "symbolon.manage"
+      }
+    ],
+    "commands": [
+      {
+        "command": "symbolon.manage",
+        "title": "Symbolon: Manage"
+      },
+      {
+        "command": "symbolon.signIn",
+        "title": "Symbolon: Continue with ChatGPT"
+      },
+      {
+        "command": "symbolon.signOut",
+        "title": "Symbolon: Sign Out"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.30",
+    "@types/vscode": "^1.118.0",
+    "@typescript-eslint/eslint-plugin": "8.53.0",
+    "@typescript-eslint/parser": "8.53.0",
+    "@vscode/vsce": "^4.0.0",
+    "eslint": "9.39.2",
+    "typescript": "5.9.3"
+  }
+}
